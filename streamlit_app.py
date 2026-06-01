@@ -467,7 +467,8 @@ def render_matchday_grid(month_df, selected_month):
     </head>
     <body>
         <div class="wc-priority-help">
-            Click a match to mark priority: Red = 1, Yellow = 2, Blue = 3, next click clears.
+            Click a match to mark priority:
+            Red = 1, Yellow = 2, Blue = 3, next click clears.
         </div>
 
         <div class="wc-calendar-grid">
@@ -584,12 +585,12 @@ def render_matchday_grid(month_df, selected_month):
     </html>
     """
 
-    component_height = max(750, len(weeks) * 200 + 90)
+    component_height = max(1500, len(weeks) * 300 + 200)
 
     components.html(
         calendar_html,
         height=component_height,
-        scrolling=True
+        scrolling=False
     )
 
 
