@@ -388,6 +388,45 @@ def render_matchday_grid(month_df, selected_month):
                 background: rgba(255, 255, 255, 0.12);
                 border: 1px solid rgba(255, 255, 255, 0.12);
                 box-sizing: border-box;
+                cursor: pointer;
+                transition: transform 0.08s ease, background 0.15s ease, border 0.15s ease;
+            }
+
+            .wc-match-pill:hover {
+                transform: scale(1.01);
+                border: 1px solid rgba(255, 255, 255, 0.35);
+            }
+
+            .wc-match-pill.watch-red {
+                background: rgba(220, 38, 38, 0.78);
+                border: 1px solid rgba(248, 113, 113, 0.95);
+            }
+
+            .wc-match-pill.watch-yellow {
+                background: rgba(202, 138, 4, 0.82);
+                border: 1px solid rgba(250, 204, 21, 0.95);
+                color: #111827;
+            }
+
+            .wc-match-pill.watch-blue {
+                background: rgba(37, 99, 235, 0.80);
+                border: 1px solid rgba(96, 165, 250, 0.95);
+            }
+
+            .wc-watch-label {
+                display: inline-block;
+                margin-top: 4px;
+                padding: 2px 5px;
+                border-radius: 999px;
+                font-size: 0.62rem;
+                font-weight: 700;
+                background: rgba(0, 0, 0, 0.28);
+                color: #ffffff;
+            }
+
+            .watch-yellow .wc-watch-label {
+                background: rgba(255, 255, 255, 0.45);
+                color: #111827;
             }
 
             .wc-match-time {
@@ -399,6 +438,12 @@ def render_matchday_grid(month_df, selected_month):
                 opacity: 0.75;
                 font-size: 0.68rem;
                 margin-top: 3px;
+            }
+
+            .wc-priority-help {
+                margin-bottom: 10px;
+                font-size: 0.82rem;
+                opacity: 0.85;
             }
 
             @media (max-width: 900px) {
@@ -421,6 +466,10 @@ def render_matchday_grid(month_df, selected_month):
         </style>
     </head>
     <body>
+        <div class="wc-priority-help">
+            Click a match to mark priority: Red = 1, Yellow = 2, Blue = 3, next click clears.
+        </div>
+
         <div class="wc-calendar-grid">
     """
 
@@ -440,6 +489,7 @@ def render_matchday_grid(month_df, selected_month):
 
             if day_matches is not None and not day_matches.empty:
                 for _, row in day_matches.iterrows():
+                    fixture_id = html.escape(str(row.get("fixture_id")))
                     match_title = html.escape(build_match_title(row))
                     match_time = html.escape(safe_text(row.get("time"), "Time TBD"))
                     match_round = html.escape(safe_text(row.get("round"), "Round TBD"))
@@ -448,10 +498,11 @@ def render_matchday_grid(month_df, selected_month):
                     location_line = f"<br>{city}" if city else ""
 
                     calendar_html += f"""
-                        <div class="wc-match-pill">
+                        <div class="wc-match-pill" data-fixture-id="{fixture_id}" onclick="cycleWatch(this)">
                             <div class="wc-match-time">{match_time}</div>
                             <div>{match_title}</div>
                             <div class="wc-match-round">{match_round}{location_line}</div>
+                            <div class="wc-watch-label" style="display:none;"></div>
                         </div>
                     """
 
@@ -459,11 +510,81 @@ def render_matchday_grid(month_df, selected_month):
 
     calendar_html += """
         </div>
+
+        <script>
+            const WATCH_STORAGE_PREFIX = "wc2026_watch_";
+
+            function applyWatchState(card, state) {
+                card.classList.remove("watch-red", "watch-yellow", "watch-blue");
+
+                const label = card.querySelector(".wc-watch-label");
+
+                if (!label) {
+                    return;
+                }
+
+                if (state === "1") {
+                    card.classList.add("watch-red");
+                    label.innerText = "RED 1";
+                    label.style.display = "inline-block";
+                } else if (state === "2") {
+                    card.classList.add("watch-yellow");
+                    label.innerText = "YELLOW 2";
+                    label.style.display = "inline-block";
+                } else if (state === "3") {
+                    card.classList.add("watch-blue");
+                    label.innerText = "BLUE 3";
+                    label.style.display = "inline-block";
+                } else {
+                    label.innerText = "";
+                    label.style.display = "none";
+                }
+            }
+
+            function cycleWatch(card) {
+                const fixtureId = card.dataset.fixtureId;
+                const storageKey = WATCH_STORAGE_PREFIX + fixtureId;
+
+                const currentState = localStorage.getItem(storageKey);
+
+                let nextState = "1";
+
+                if (currentState === "1") {
+                    nextState = "2";
+                } else if (currentState === "2") {
+                    nextState = "3";
+                } else if (currentState === "3") {
+                    nextState = "";
+                }
+
+                if (nextState) {
+                    localStorage.setItem(storageKey, nextState);
+                } else {
+                    localStorage.removeItem(storageKey);
+                }
+
+                applyWatchState(card, nextState);
+            }
+
+            function loadSavedWatchStates() {
+                const cards = document.querySelectorAll(".wc-match-pill");
+
+                cards.forEach(card => {
+                    const fixtureId = card.dataset.fixtureId;
+                    const storageKey = WATCH_STORAGE_PREFIX + fixtureId;
+                    const savedState = localStorage.getItem(storageKey);
+
+                    applyWatchState(card, savedState);
+                });
+            }
+
+            loadSavedWatchStates();
+        </script>
     </body>
     </html>
     """
 
-    component_height = max(750, len(weeks) * 200 + 70)
+    component_height = max(750, len(weeks) * 200 + 90)
 
     components.html(
         calendar_html,
