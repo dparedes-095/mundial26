@@ -193,6 +193,312 @@ def apply_filters(fixtures_df, selected_date_range, selected_team, selected_roun
     return filtered_df
 
 
+def get_next_match(fixtures_df):
+    now = pd.Timestamp.now(tz=ZoneInfo(LOCAL_TIMEZONE))
+
+    upcoming_df = fixtures_df[
+        fixtures_df["datetime_local"] >= now
+    ].sort_values("datetime_local")
+
+    if upcoming_df.empty:
+        return None
+
+    return upcoming_df.iloc[0]
+
+
+def get_next_team_match(fixtures_df, team_name):
+    now = pd.Timestamp.now(tz=ZoneInfo(LOCAL_TIMEZONE))
+
+    team_df = fixtures_df[
+        (
+            (fixtures_df["home_team"] == team_name)
+            | (fixtures_df["away_team"] == team_name)
+        )
+        & (fixtures_df["datetime_local"] >= now)
+    ].sort_values("datetime_local")
+
+    if team_df.empty:
+        return None
+
+    return team_df.iloc[0]
+
+
+def format_short_match_value(row):
+    if row is None:
+        return "None found"
+
+    match_title = build_match_title(row)
+    match_date = pd.to_datetime(row["date"]).strftime("%b %d")
+    match_time = safe_text(row.get("time"), "Time TBD")
+
+    return f"{match_title} · {match_date}, {match_time}"
+
+
+def render_dashboard_card(title, value, caption=None):
+    with st.container(border=True):
+        st.caption(title)
+        st.markdown(f"**{value}**")
+
+        if caption:
+            st.caption(caption)
+
+
+def render_tab1_hero_cards(fixtures_df):
+    today = pd.Timestamp.now(tz=ZoneInfo(LOCAL_TIMEZONE)).date()
+
+    today_df = fixtures_df[fixtures_df["date"] == today]
+    next_match = get_next_match(fixtures_df)
+    next_usa_match = get_next_team_match(fixtures_df, "USA")
+
+    if today_df.empty:
+        cities_today = "None today"
+    else:
+        cities = sorted(
+            [
+                safe_text(city)
+                for city in today_df["city"].dropna().unique().tolist()
+                if safe_text(city)
+            ]
+        )
+
+        if not cities:
+            cities_today = "Venue TBD"
+        elif len(cities) <= 2:
+            cities_today = ", ".join(cities)
+        else:
+            cities_today = ", ".join(cities[:2]) + f" +{len(cities) - 2} more"
+
+    hero1, hero2, hero3, hero4 = st.columns(4)
+
+    with hero1:
+        render_dashboard_card(
+            "Matches Today",
+            len(today_df),
+            today.strftime("%A, %b %d")
+        )
+
+    with hero2:
+        render_dashboard_card(
+            "Next Match",
+            format_short_match_value(next_match)
+        )
+
+    with hero3:
+        render_dashboard_card(
+            "Next USA Match",
+            format_short_match_value(next_usa_match)
+        )
+
+    with hero4:
+        render_dashboard_card(
+            "Host Cities Today",
+            cities_today
+        )
+
+
+def render_quick_filters(fixtures_df):
+    st.markdown("#### ⚡ Quick Filters")
+
+    today = pd.Timestamp.now(tz=ZoneInfo(LOCAL_TIMEZONE)).date()
+    tomorrow = today + pd.Timedelta(days=1)
+    week_end = today + pd.Timedelta(days=7)
+
+    if "quick_filter" not in st.session_state:
+        st.session_state.quick_filter = "All"
+
+    quick1, quick2, quick3, quick4, quick5, quick6, quick7 = st.columns(7)
+
+    with quick1:
+        if st.button("All", use_container_width=True):
+            st.session_state.quick_filter = "All"
+
+    with quick2:
+        if st.button("Today", use_container_width=True):
+            st.session_state.quick_filter = "Today"
+
+    with quick3:
+        if st.button("Tomorrow", use_container_width=True):
+            st.session_state.quick_filter = "Tomorrow"
+
+    with quick4:
+        if st.button("This Week", use_container_width=True):
+            st.session_state.quick_filter = "This Week"
+
+    with quick5:
+        if st.button("USA", use_container_width=True):
+            st.session_state.quick_filter = "USA"
+
+    with quick6:
+        if st.button("Mexico", use_container_width=True):
+            st.session_state.quick_filter = "Mexico"
+
+    with quick7:
+        if st.button("Live Now", use_container_width=True):
+            st.session_state.quick_filter = "Live Now"
+
+    quick_filter = st.session_state.quick_filter
+    quick_df = fixtures_df.copy()
+
+    if quick_filter == "Today":
+        quick_df = quick_df[quick_df["date"] == today]
+
+    elif quick_filter == "Tomorrow":
+        quick_df = quick_df[quick_df["date"] == tomorrow]
+
+    elif quick_filter == "This Week":
+        quick_df = quick_df[
+            (quick_df["date"] >= today)
+            & (quick_df["date"] <= week_end)
+        ]
+
+    elif quick_filter == "USA":
+        quick_df = quick_df[
+            (quick_df["home_team"] == "USA")
+            | (quick_df["away_team"] == "USA")
+        ]
+
+    elif quick_filter == "Mexico":
+        quick_df = quick_df[
+            (quick_df["home_team"] == "Mexico")
+            | (quick_df["away_team"] == "Mexico")
+        ]
+
+    elif quick_filter == "Live Now":
+        quick_df = quick_df[quick_df["bucket"] == "Live"]
+
+    st.caption(f"Active quick filter: **{quick_filter}**")
+
+    return quick_df
+
+
+def get_round_sort_key(round_name):
+    round_text = safe_text(round_name, "Round TBD").lower()
+
+    if "group" in round_text:
+        return 1
+    if "round of 32" in round_text:
+        return 2
+    if "round of 16" in round_text:
+        return 3
+    if "quarter" in round_text:
+        return 4
+    if "semi" in round_text:
+        return 5
+    if "third" in round_text:
+        return 6
+    if "final" in round_text:
+        return 7
+
+    return 99
+
+
+def render_round_progress(fixtures_df):
+    st.markdown("#### 🧭 Tournament Progress")
+
+    round_counts = (
+        fixtures_df
+        .groupby("round")
+        .size()
+        .reset_index(name="matches")
+    )
+
+    if round_counts.empty:
+        st.info("No round data available yet.")
+        return
+
+    round_counts["sort_key"] = round_counts["round"].apply(get_round_sort_key)
+    round_counts = round_counts.sort_values(["sort_key", "round"])
+
+    total_matches = int(round_counts["matches"].sum())
+
+    progress_cols = st.columns(min(len(round_counts), 4))
+
+    for index, row in round_counts.iterrows():
+        col = progress_cols[index % len(progress_cols)]
+
+        with col:
+            share = int(row["matches"]) / total_matches if total_matches else 0
+
+            with st.container(border=True):
+                st.caption(safe_text(row["round"], "Round TBD"))
+                st.markdown(f"**{int(row['matches'])} matches**")
+                st.progress(share)
+
+
+def render_team_profile(fixtures_df, selected_team):
+    if selected_team == "All teams":
+        return
+
+    team_df = fixtures_df[
+        (fixtures_df["home_team"] == selected_team)
+        | (fixtures_df["away_team"] == selected_team)
+    ].sort_values("datetime_local")
+
+    if team_df.empty:
+        return
+
+    first_match = team_df.iloc[0]
+    next_match = get_next_team_match(fixtures_df, selected_team)
+
+    cities = sorted(
+        [
+            safe_text(city)
+            for city in team_df["city"].dropna().unique().tolist()
+            if safe_text(city)
+        ]
+    )
+
+    rounds = sorted(
+        [
+            safe_text(round_name)
+            for round_name in team_df["round"].dropna().unique().tolist()
+            if safe_text(round_name)
+        ],
+        key=get_round_sort_key
+    )
+
+    if not cities:
+        city_value = "TBD"
+    elif len(cities) <= 2:
+        city_value = ", ".join(cities)
+    else:
+        city_value = ", ".join(cities[:2]) + f" +{len(cities) - 2} more"
+
+    if not rounds:
+        round_value = "TBD"
+    elif len(rounds) <= 2:
+        round_value = ", ".join(rounds)
+    else:
+        round_value = ", ".join(rounds[:2]) + f" +{len(rounds) - 2} more"
+
+    st.markdown(f"#### 🧬 {selected_team} Snapshot")
+
+    p1, p2, p3, p4 = st.columns(4)
+
+    with p1:
+        render_dashboard_card("Matches", len(team_df), round_value)
+
+    with p2:
+        render_dashboard_card("First Match", format_short_match_value(first_match))
+
+    with p3:
+        render_dashboard_card("Next Match", format_short_match_value(next_match))
+
+    with p4:
+        render_dashboard_card("Cities", city_value)
+
+    with st.expander(f"{selected_team} full team schedule"):
+        for _, row in team_df.iterrows():
+            st.markdown(
+                f"**{pd.to_datetime(row['date']).strftime('%A, %B %d')} · "
+                f"{safe_text(row.get('time'), 'Time TBD')}** — "
+                f"{build_match_title(row)}"
+            )
+            st.caption(
+                f"{safe_text(row.get('round'), 'Round TBD')} · {build_location(row)}"
+            )
+
+
 def render_match_list(filtered_df):
     st.subheader("📅 Match Calendar")
 
@@ -597,6 +903,34 @@ def render_matchday_grid(month_df, selected_month):
 def render_matchday_view(fixtures_df):
     st.subheader("🗓️ Matchday Grid")
 
+    with st.expander("How to use this grid", expanded=False):
+        st.markdown(
+            """
+            **What this tab is for**
+
+            This is the visual calendar view of the World Cup schedule. Use it when you want to see matches laid out by month instead of scrolling through the full list.
+
+            **Controls**
+
+            - **Month** changes the calendar month.
+            - **Team filter** shows only matches for one team, or all teams.
+            - **View style** lets you switch between:
+              - **Grid**: calendar-style layout for desktop/tablet.
+              - **Mobile List**: easier vertical list for smaller screens.
+
+            **Priority colors**
+
+            In **Grid** view, click a match card to cycle your watch priority:
+
+            - **Red 1** = must-watch
+            - **Yellow 2** = interested
+            - **Blue 3** = maybe / background watch
+            - Click again after Blue to clear it.
+
+            Your color choices are saved in this browser, so they should stick around when you refresh on the same device.
+            """
+        )
+
     selected_month, calendar_team, month_df = get_grid_filtered_df(fixtures_df)
 
     if selected_month is None:
@@ -655,15 +989,12 @@ fixtures_df["bucket"] = fixtures_df.apply(get_game_bucket, axis=1)
 
 top1, top2, top3 = st.columns(3)
 
-top1.metric("Fixtures Loaded", len(fixtures_df))
 
 teams_loaded = len(
     set(fixtures_df["home_team"].dropna())
     | set(fixtures_df["away_team"].dropna())
 )
-top2.metric("Teams", teams_loaded)
 
-top3.metric("API Results", results)
 
 st.divider()
 
@@ -671,53 +1002,78 @@ tab1, tab2 = st.tabs(["📋 Match List", "🗓️ Matchday Grid"])
 
 
 with tab1:
-    filter1, filter2, filter3, filter4 = st.columns([1.5, 1.5, 1.5, 1])
+    render_tab1_hero_cards(fixtures_df)
 
-    with filter1:
-        min_date = fixtures_df["date"].min()
-        max_date = fixtures_df["date"].max()
+    st.divider()
 
-        selected_date_range = st.date_input(
-            "Date range",
-            value=(min_date, max_date),
-            min_value=min_date,
-            max_value=max_date
+    quick_filtered_df = render_quick_filters(fixtures_df)
+
+    st.divider()
+
+    render_round_progress(fixtures_df)
+
+    st.divider()
+
+    if quick_filtered_df.empty:
+        st.warning("No matches available for this quick filter.")
+    else:
+        filter1, filter2, filter3, filter4 = st.columns([1.5, 1.5, 1.5, 1])
+
+        with filter1:
+            min_date = quick_filtered_df["date"].min()
+            max_date = quick_filtered_df["date"].max()
+
+            selected_date_range = st.date_input(
+                "Date range",
+                value=(min_date, max_date),
+                min_value=min_date,
+                max_value=max_date
+            )
+
+        with filter2:
+            teams = sorted(
+                set(quick_filtered_df["home_team"].dropna().tolist())
+                | set(quick_filtered_df["away_team"].dropna().tolist())
+            )
+
+            selected_team = st.selectbox(
+                "Team",
+                options=["All teams"] + teams
+            )
+
+        with filter3:
+            rounds = sorted(
+                quick_filtered_df["round"]
+                .dropna()
+                .unique()
+                .tolist(),
+                key=get_round_sort_key
+            )
+
+            selected_round = st.selectbox(
+                "Round",
+                options=["All rounds"] + rounds
+            )
+
+        with filter4:
+            selected_bucket = st.selectbox(
+                "View",
+                options=["All", "Upcoming", "Live", "Results"]
+            )
+
+        filtered_df = apply_filters(
+            quick_filtered_df,
+            selected_date_range,
+            selected_team,
+            selected_round,
+            selected_bucket
         )
 
-    with filter2:
-        teams = sorted(
-            set(fixtures_df["home_team"].dropna().tolist())
-            | set(fixtures_df["away_team"].dropna().tolist())
-        )
+        render_team_profile(quick_filtered_df, selected_team)
 
-        selected_team = st.selectbox(
-            "Team",
-            options=["All teams"] + teams
-        )
+        st.divider()
 
-    with filter3:
-        rounds = sorted(fixtures_df["round"].dropna().unique().tolist())
-
-        selected_round = st.selectbox(
-            "Round",
-            options=["All rounds"] + rounds
-        )
-
-    with filter4:
-        selected_bucket = st.selectbox(
-            "View",
-            options=["All", "Upcoming", "Live", "Results"]
-        )
-
-    filtered_df = apply_filters(
-        fixtures_df,
-        selected_date_range,
-        selected_team,
-        selected_round,
-        selected_bucket
-    )
-
-    render_match_list(filtered_df)
+        render_match_list(filtered_df)
 
 
 with tab2:
