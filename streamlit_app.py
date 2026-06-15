@@ -103,6 +103,8 @@ def normalize_fixtures(api_result):
 
             "round": safe_text(league.get("round"), "Round TBD"),
 
+                        "home_team_id": home.get("id"),
+            "away_team_id": away.get("id"),
             "home_team": safe_text(home.get("name"), "TBD"),
             "away_team": safe_text(away.get("name"), "TBD"),
             "home_logo": home.get("logo"),
@@ -949,6 +951,437 @@ def render_matchday_view(fixtures_df):
         render_matchday_mobile_list(month_df)
 
 
+
+# -----------------------------
+# Player API helpers
+# -----------------------------
+
+def get_first_stat(player_item):
+    statistics = player_item.get("statistics", []) or []
+    if not statistics:
+        return {}
+
+    return statistics[0] or {}
+
+
+def nested_get(source, path, fallback=None):
+    current = source
+
+    for part in path:
+        if not isinstance(current, dict):
+            return fallback
+        current = current.get(part)
+
+    if current is None:
+        return fallback
+
+    return current
+
+
+def to_int_or_none(value):
+    try:
+        if pd.isna(value):
+            return None
+        return int(value)
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=60 * 30)
+def fetch_top_players(endpoint):
+    url = f"{BASE_URL}/{endpoint}"
+
+    params = {
+        "league": WORLD_CUP_LEAGUE_ID,
+        "season": WORLD_CUP_SEASON
+    }
+
+    headers = {
+        "x-apisports-key": API_KEY
+    }
+
+    response = requests.get(
+        url,
+        headers=headers,
+        params=params,
+        timeout=20
+    )
+
+    response.raise_for_status()
+    return response.json()
+
+
+@st.cache_data(ttl=60 * 30)
+def fetch_players_search(search_text=None, team_id=None):
+    url = f"{BASE_URL}/players"
+
+    params = {
+        "league": WORLD_CUP_LEAGUE_ID,
+        "season": WORLD_CUP_SEASON
+    }
+
+    if search_text:
+        params["search"] = search_text
+
+    if team_id:
+        params["team"] = team_id
+
+    headers = {
+        "x-apisports-key": API_KEY
+    }
+
+    response = requests.get(
+        url,
+        headers=headers,
+        params=params,
+        timeout=20
+    )
+
+    response.raise_for_status()
+    return response.json()
+
+
+@st.cache_data(ttl=60 * 10)
+def fetch_fixture_player_stats(fixture_id):
+    url = f"{BASE_URL}/fixtures/players"
+
+    params = {
+        "fixture": int(fixture_id)
+    }
+
+    headers = {
+        "x-apisports-key": API_KEY
+    }
+
+    response = requests.get(
+        url,
+        headers=headers,
+        params=params,
+        timeout=20
+    )
+
+    response.raise_for_status()
+    return response.json()
+
+
+def player_response_to_df(api_result):
+    rows = []
+
+    for item in api_result.get("response", []) or []:
+        player = item.get("player", {}) or {}
+        stat = get_first_stat(item)
+
+        games = stat.get("games", {}) or {}
+        team = stat.get("team", {}) or {}
+        goals = stat.get("goals", {}) or {}
+        cards = stat.get("cards", {}) or {}
+        shots = stat.get("shots", {}) or {}
+        passes = stat.get("passes", {}) or {}
+        tackles = stat.get("tackles", {}) or {}
+        duels = stat.get("duels", {}) or {}
+
+        rows.append({
+            "player_id": player.get("id"),
+            "Player": safe_text(player.get("name"), "Unknown"),
+            "Age": player.get("age"),
+            "Team": safe_text(team.get("name"), "TBD"),
+            "Position": safe_text(games.get("position"), "TBD"),
+            "Appearances": games.get("appearences"),
+            "Starts": games.get("lineups"),
+            "Minutes": games.get("minutes"),
+            "Rating": games.get("rating"),
+            "Goals": goals.get("total"),
+            "Assists": goals.get("assists"),
+            "Shots": shots.get("total"),
+            "Shots on Goal": shots.get("on"),
+            "Passes": passes.get("total"),
+            "Key Passes": passes.get("key"),
+            "Tackles": tackles.get("total"),
+            "Duels Won": duels.get("won"),
+            "Yellow": cards.get("yellow"),
+            "Red": cards.get("red"),
+        })
+
+    df = pd.DataFrame(rows)
+
+    if not df.empty:
+        for col in ["Age", "Appearances", "Starts", "Minutes", "Goals", "Assists", "Shots", "Shots on Goal", "Passes", "Key Passes", "Tackles", "Duels Won", "Yellow", "Red"]:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+        df["Rating"] = pd.to_numeric(df["Rating"], errors="coerce")
+        df = df.sort_values(["Goals", "Assists", "Rating"], ascending=[False, False, False], na_position="last")
+
+    return df
+
+
+def fixture_players_to_df(api_result):
+    rows = []
+
+    for team_block in api_result.get("response", []) or []:
+        team = team_block.get("team", {}) or {}
+        team_name = safe_text(team.get("name"), "TBD")
+
+        for player_item in team_block.get("players", []) or []:
+            player = player_item.get("player", {}) or {}
+            stat = player_item.get("statistics", [{}])[0] or {}
+
+            games = stat.get("games", {}) or {}
+            goals = stat.get("goals", {}) or {}
+            shots = stat.get("shots", {}) or {}
+            passes = stat.get("passes", {}) or {}
+            tackles = stat.get("tackles", {}) or {}
+            duels = stat.get("duels", {}) or {}
+            cards = stat.get("cards", {}) or {}
+
+            rows.append({
+                "Team": team_name,
+                "Player": safe_text(player.get("name"), "Unknown"),
+                "Position": safe_text(games.get("position"), "TBD"),
+                "Minutes": games.get("minutes"),
+                "Rating": games.get("rating"),
+                "Goals": goals.get("total"),
+                "Assists": goals.get("assists"),
+                "Shots": shots.get("total"),
+                "Shots on Goal": shots.get("on"),
+                "Passes": passes.get("total"),
+                "Pass Accuracy": passes.get("accuracy"),
+                "Tackles": tackles.get("total"),
+                "Duels Won": duels.get("won"),
+                "Yellow": cards.get("yellow"),
+                "Red": cards.get("red"),
+            })
+
+    df = pd.DataFrame(rows)
+
+    if not df.empty:
+        number_cols = ["Minutes", "Rating", "Goals", "Assists", "Shots", "Shots on Goal", "Passes", "Tackles", "Duels Won", "Yellow", "Red"]
+        for col in number_cols:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+        df = df.sort_values(["Rating", "Goals", "Assists"], ascending=[False, False, False], na_position="last")
+
+    return df
+
+
+def get_team_id_options(fixtures_df):
+    team_rows = []
+
+    home_rows = fixtures_df[["home_team", "home_team_id"]].rename(
+        columns={"home_team": "team", "home_team_id": "team_id"}
+    )
+    away_rows = fixtures_df[["away_team", "away_team_id"]].rename(
+        columns={"away_team": "team", "away_team_id": "team_id"}
+    )
+
+    team_df = pd.concat([home_rows, away_rows], ignore_index=True)
+    team_df = team_df.dropna(subset=["team", "team_id"]).drop_duplicates()
+
+    for _, row in team_df.sort_values("team").iterrows():
+        team_rows.append((safe_text(row["team"]), int(row["team_id"])))
+
+    return team_rows
+
+
+def render_player_table(df, label):
+    if df.empty:
+        st.info(f"No {label.lower()} found yet. This may stay empty until squads/match stats are populated by the API.")
+        return
+
+    preferred_cols = [
+        "Player", "Team", "Position", "Age", "Appearances", "Starts", "Minutes",
+        "Rating", "Goals", "Assists", "Shots", "Shots on Goal", "Passes",
+        "Key Passes", "Tackles", "Duels Won", "Yellow", "Red"
+    ]
+
+    display_cols = [col for col in preferred_cols if col in df.columns]
+    st.dataframe(
+        df[display_cols],
+        use_container_width=True,
+        hide_index=True
+    )
+
+
+def render_fixture_player_table(df):
+    if df.empty:
+        st.info("No player stats found for this fixture yet. Pre-match fixtures often stay empty until lineups or full-time stats are available.")
+        return
+
+    display_cols = [
+        "Team", "Player", "Position", "Minutes", "Rating", "Goals", "Assists",
+        "Shots", "Shots on Goal", "Passes", "Pass Accuracy", "Tackles",
+        "Duels Won", "Yellow", "Red"
+    ]
+
+    display_cols = [col for col in display_cols if col in df.columns]
+
+    st.dataframe(
+        df[display_cols],
+        use_container_width=True,
+        hide_index=True
+    )
+
+
+def render_player_tracker(fixtures_df):
+    st.subheader("⭐ Player Tracker")
+    st.caption("Search players, view tournament leaderboards, and inspect per-match player stats when the API has them.")
+
+    with st.expander("How to use Player Tracker", expanded=False):
+        st.markdown(
+            """
+            **What this tab does**
+
+            - **Leaderboards** pulls API-Football player ranking endpoints for the World Cup season.
+            - **Player Search** searches the `/players` endpoint by player name and optional team.
+            - **Match Player Stats** uses `/fixtures/players` for one selected fixture.
+
+            **Important**
+
+            Some World Cup player endpoints may be empty before squads, lineups, or completed matches are available.
+            Use the debug expanders to see the raw API response if something looks blank.
+            """
+        )
+
+    team_options = get_team_id_options(fixtures_df)
+    team_name_to_id = {name: team_id for name, team_id in team_options}
+
+    board_tab, search_tab, match_tab = st.tabs(
+        ["🏆 Leaderboards", "🔎 Player Search", "📌 Match Player Stats"]
+    )
+
+    with board_tab:
+        st.markdown("#### Tournament leaderboards")
+
+        leaderboard_map = {
+            "Top Scorers": "players/topscorers",
+            "Top Assists": "players/topassists",
+            "Top Yellow Cards": "players/topyellowcards",
+            "Top Red Cards": "players/topredcards",
+        }
+
+        board_choice = st.selectbox(
+            "Leaderboard",
+            options=list(leaderboard_map.keys())
+        )
+
+        endpoint = leaderboard_map[board_choice]
+
+        try:
+            board_result = fetch_top_players(endpoint)
+            board_df = player_response_to_df(board_result)
+
+            metric1, metric2, metric3 = st.columns(3)
+
+            with metric1:
+                st.metric("Rows returned", len(board_df))
+
+            with metric2:
+                st.metric("API results", board_result.get("results", 0))
+
+            with metric3:
+                st.metric("Endpoint", endpoint)
+
+            render_player_table(board_df, board_choice)
+
+            with st.expander("Raw leaderboard API response"):
+                st.json(board_result)
+
+        except requests.HTTPError as e:
+            st.error(f"Leaderboard request failed: {e}")
+        except Exception as e:
+            st.error(f"Something went wrong loading the leaderboard: {e}")
+
+    with search_tab:
+        st.markdown("#### Search player stats")
+
+        search_col1, search_col2 = st.columns([2, 1.3])
+
+        with search_col1:
+            search_text = st.text_input(
+                "Player name",
+                placeholder="Example: Messi, Pulisic, Mbappe"
+            )
+
+        with search_col2:
+            selected_team_name = st.selectbox(
+                "Optional team filter",
+                options=["All teams"] + list(team_name_to_id.keys())
+            )
+
+        selected_team_id = None
+        if selected_team_name != "All teams":
+            selected_team_id = team_name_to_id.get(selected_team_name)
+
+        run_search = st.button("Search players", use_container_width=True)
+
+        if run_search:
+            if not search_text and not selected_team_id:
+                st.warning("Enter a player name or choose a team first.")
+            else:
+                try:
+                    player_result = fetch_players_search(search_text=search_text, team_id=selected_team_id)
+                    player_df = player_response_to_df(player_result)
+
+                    result1, result2 = st.columns(2)
+                    with result1:
+                        st.metric("Rows returned", len(player_df))
+                    with result2:
+                        st.metric("API results", player_result.get("results", 0))
+
+                    render_player_table(player_df, "players")
+
+                    with st.expander("Raw player search API response"):
+                        st.json(player_result)
+
+                except requests.HTTPError as e:
+                    st.error(f"Player search failed: {e}")
+                except Exception as e:
+                    st.error(f"Something went wrong searching players: {e}")
+
+    with match_tab:
+        st.markdown("#### Per-match player stats")
+
+        fixture_options = fixtures_df.sort_values("datetime_local").copy()
+        fixture_options["fixture_label"] = fixture_options.apply(
+            lambda row: (
+                f"{pd.to_datetime(row['date']).strftime('%b %d')} · "
+                f"{safe_text(row.get('time'), 'Time TBD')} · "
+                f"{build_match_title(row)}"
+            ),
+            axis=1
+        )
+
+        fixture_label_to_id = dict(
+            zip(fixture_options["fixture_label"], fixture_options["fixture_id"])
+        )
+
+        selected_fixture_label = st.selectbox(
+            "Fixture",
+            options=fixture_options["fixture_label"].tolist()
+        )
+
+        selected_fixture_id = fixture_label_to_id.get(selected_fixture_label)
+
+        if st.button("Load match player stats", use_container_width=True):
+            try:
+                fixture_player_result = fetch_fixture_player_stats(selected_fixture_id)
+                fixture_player_df = fixture_players_to_df(fixture_player_result)
+
+                stat1, stat2 = st.columns(2)
+                with stat1:
+                    st.metric("Players returned", len(fixture_player_df))
+                with stat2:
+                    st.metric("API results", fixture_player_result.get("results", 0))
+
+                render_fixture_player_table(fixture_player_df)
+
+                with st.expander("Raw fixture player API response"):
+                    st.json(fixture_player_result)
+
+            except requests.HTTPError as e:
+                st.error(f"Fixture player stats request failed: {e}")
+            except Exception as e:
+                st.error(f"Something went wrong loading fixture player stats: {e}")
+
 st.title("🏆 World Cup 2026 Calendar")
 st.caption("Calendar view of teams, kickoff times, venues, and match status.")
 
@@ -998,7 +1431,7 @@ teams_loaded = len(
 
 st.divider()
 
-tab1, tab2 = st.tabs(["📋 Match List", "🗓️ Matchday Grid"])
+tab1, tab2, tab3 = st.tabs(["📋 Match List", "🗓️ Matchday Grid", "⭐ Player Tracker"])
 
 
 with tab1:
@@ -1078,6 +1511,10 @@ with tab1:
 
 with tab2:
     render_matchday_view(fixtures_df)
+
+
+with tab3:
+    render_player_tracker(fixtures_df)
 
 
 with st.expander("Raw API response"):
